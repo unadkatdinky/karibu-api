@@ -12,7 +12,6 @@ import (
 	"karibu-api/internal/database"
 	"karibu-api/internal/handlers"
 	"karibu-api/internal/middleware"
-	
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -44,7 +43,7 @@ func main() {
 	// ============================================
 	// 4. GLOBAL MIDDLEWARE (Applied to ALL routes)
 	// ============================================
-	
+
 	// Logger Middleware
 	// This logs every request: method, path, status code, duration
 	// Useful for debugging and monitoring
@@ -52,7 +51,7 @@ func main() {
 
 	// CORS Middleware (Cross-Origin Resource Sharing)
 	// Allows your React app (localhost:5173) to talk to this API (localhost:8080)
-	// 
+	//
 	// Why CORS?
 	// Browsers block requests from different domains by default (security)
 	// CORS tells the browser: "It's OK, I allow requests from React"
@@ -77,7 +76,7 @@ func main() {
 	// ============================================
 	// 5. API ROUTES
 	// ============================================
-	
+
 	// Create API group with version prefix
 	// Routes will be /api/v1/...
 	api := r.Group("/api/v1")
@@ -120,6 +119,9 @@ func main() {
 				middleware.AuthRequired(), // Only authenticated users
 				handlers.Logout,
 			)
+
+			authRoutes.POST("/forgot-password", handlers.ForgotPassword)
+			authRoutes.POST("/reset-password", handlers.ResetPassword)
 		}
 
 		// ---- PROTECTED ROUTES EXAMPLE ----
@@ -162,7 +164,7 @@ func main() {
 	// ============================================
 	// 7. START SERVER WITH GRACEFUL SHUTDOWN
 	// ============================================
-	
+
 	// Get port from environment, default to 8080
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -174,9 +176,9 @@ func main() {
 	server := &http.Server{
 		Addr:           ":" + port,
 		Handler:        r,
-		ReadTimeout:    15 * time.Second,  // Max time to read request
-		WriteTimeout:   15 * time.Second,  // Max time to write response
-		MaxHeaderBytes: 1 << 20,           // 1MB max header size
+		ReadTimeout:    15 * time.Second, // Max time to read request
+		WriteTimeout:   15 * time.Second, // Max time to write response
+		MaxHeaderBytes: 1 << 20,          // 1MB max header size
 	}
 
 	// Start server in a separate goroutine
@@ -184,7 +186,7 @@ func main() {
 	go func() {
 		log.Printf("🚀 Server starting on http://localhost:%s", port)
 		log.Printf("📍 API available at http://localhost:%s/api/v1", port)
-		
+
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("❌ Server error: %v", err)
 		}
@@ -195,11 +197,11 @@ func main() {
 	// ============================================
 	// This waits for interrupt signal (Ctrl+C, SIGTERM)
 	// Then cleanly shuts down the server
-	
+
 	quit := make(chan os.Signal, 1)
 	// Listen for SIGINT (Ctrl+C) and SIGTERM (kill signal)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	
+
 	// Block until signal is received
 	sig := <-quit
 	log.Printf("📍 Received signal: %v", sig)

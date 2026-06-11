@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+	"crypto/rand"
+    "encoding/hex"
 
 	"karibu-api/internal/database"
 	"karibu-api/internal/models"
@@ -42,6 +44,14 @@ type RefreshInput struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
+type ForgotPasswordInput struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+type ResetPasswordInput struct {
+	Token       string `json:"token" binding:"required"`
+	NewPassword string `json:"newPassword" binding:"required"`
+}
 // ============================================
 // REGISTER HANDLER
 // ============================================
@@ -483,3 +493,91 @@ func HealthCheck(c *gin.Context) {
 		"timestamp": time.Now(),
 	})
 }
+
+// Helper to generate a random hex token
+func generateSecureToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
+func ForgotPassword(c *gin.Context) {
+	var input ForgotPasswordInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Valid email is required"})
+		return
+	}
+
+	// 1. Generate a secure token and set expiration (1 hour from now)
+	token, err := generateSecureToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+		return
+	}
+	expiresAt := time.Now().Add(1 * time.Hour)
+
+	// 2. Save token to database (only if user exists)
+	query := `UPDATE users SET reset_token = $1, reset_token_expires_at = $2 WHERE email = $3 RETURNING id`
+	var id string
+	err = database.DB.QueryRow(query, token, expiresAt, input.Email).Scan(&id)
+
+	if err != nil {
+		// SECURITY: Even if the email doesn't exist, we return a success message!
+		// This prevents hackers from using this endpoint to guess valid emails.
+		c.JSON(http.StatusOK, gin.H{"message": "If an account exists, a reset link has been sent."})
+		return
+	}
+
+	// 3. MOCK EMAIL DELIVERY: Print the link to your Go terminal!
+	resetLink := fmt.Sprintf("http://localhost:5173/reset-password?token=%s", token)
+	log.Println("=====================================================")
+	log.Printf("📧 EMAIL SENT TO: %s\n", input.Email)
+	log.Printf("🔗 CLICK TO RESET: %s\n", resetLink)
+	log.Println("=====================================================")
+
+	c.JSON(http.StatusOK, gin.H{"message": "If an account exists, a reset link has been sent."})
+}
+
+func ResetPassword(c *gin.Context) {
+	var input ResetPasswordInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Token and new password are required"})
+		return
+	}
+
+	// 1. Validate the new password strength using your exact utility
+	passwordErrors := utils.ValidatePassword(input.NewPassword)
+	if len(passwordErrors) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password is too weak", "details": passwordErrors})
+		return
+	}
+
+	// 2. Hash the new password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), 12)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process password"})
+		return
+	}
+
+	// 3. Find the user by token, check expiration, and update password
+	// We also immediately NULL the token so it can never be used again
+	query := `
+		UPDATE users 
+		SET password_hash = $1, reset_token = NULL, reset_token_expires_at = NULL 
+		WHERE reset_token = $2 AND reset_token_expires_at > NOW() 
+		RETURNING id
+	`
+	
+	var id string
+	err = database.DB.QueryRow(query, string(hashedPassword), input.Token).Scan(&id)
+
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired reset link. Please request a new one."})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Password successfully reset. You can now log in."})
+}
+
