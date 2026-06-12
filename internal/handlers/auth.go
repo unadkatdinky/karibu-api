@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 	"time"
-	"crypto/rand"
+	"math/rand"
     "encoding/hex"
 
 	"karibu-api/internal/database"
@@ -52,17 +52,20 @@ type ResetPasswordInput struct {
 	Token       string `json:"token" binding:"required"`
 	NewPassword string `json:"newPassword" binding:"required"`
 }
+
+type VerifyOTPInput struct {
+	Email string `json:"email" binding:"required,email"`
+	OTP   string `json:"otp" binding:"required,len=6"`
+}
+
 // ============================================
 // REGISTER HANDLER
 // ============================================
 // This function creates a new user account
 // Called when user submits the registration form
 func Register(c *gin.Context) {
-	// ---- STEP 1: Parse incoming JSON ----
 	var input RegisterInput
 
-	// c.ShouldBindJSON validates the JSON against our struct tags
-	// If validation fails (missing fields, wrong type, etc), this returns error
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Validation failed",
@@ -71,9 +74,6 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	// ---- STEP 2: Validate password strength ----
-	// Just requiring min=8 is not enough
-	// We need uppercase, lowercase, numbers, special chars
 	passwordErrors := utils.ValidatePassword(input.Password)
 	if len(passwordErrors) > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -83,37 +83,21 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	// ---- STEP 3: Hash the password ----
-	// WHY WE HASH:
-	// - We NEVER store plain passwords in database
-	// - If database is breached, attacker can't use the passwords
-	// - We can't reverse hashes, so we can't recover passwords
-	// - Users should ALWAYS have password reset, never "recover password"
-	//
-	// BCRYPT COST (12):
-	// - Cost = 2^cost iterations
-	// - Cost 12 = 4096 iterations (takes ~100ms to hash)
-	// - This makes brute force attacks SLOW
-	// - Higher cost = slower (more secure, but slower)
-	// - Use 12 for web, 14-15 for passwords you want really secure
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.Password), 12)
 	if err != nil {
-		// This rarely happens (system issues)
-		log.Printf("Bcrypt error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Server error processing password",
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error processing password"})
 		return
 	}
 
-	// ---- STEP 4: Insert user into database ----
-	// We use parameterized queries to prevent SQL injection
-	// $1, $2, etc are placeholders - the actual values are passed separately
-	// This means even if user enters SQL code, it won't be executed
+	// ---- NEW OTP LOGIC ----
+	// Generate a 6-digit random number
+	otp := fmt.Sprintf("%06d", rand.Intn(1000000))
+	expiresAt := time.Now().Add(15 * time.Minute)
+
 	var newUserID string
 	query := `
-		INSERT INTO users (full_name, email, password_hash, role) 
-		VALUES ($1, $2, $3, $4) 
+		INSERT INTO users (full_name, email, password_hash, role, otp_code, otp_expires_at, is_verified) 
+		VALUES ($1, $2, $3, $4, $5, $6, false) 
 		RETURNING id
 	`
 	
@@ -121,45 +105,33 @@ func Register(c *gin.Context) {
 		query,
 		input.FullName,
 		input.Email,
-		string(hashedPassword), // Convert byte slice to string for storage
+		string(hashedPassword),
 		input.Role,
+		otp,
+		expiresAt,
 	).Scan(&newUserID)
 	
 	if err != nil {
-		// Check if it's a duplicate email error
 		if err.Error() == "pq: duplicate key value violates unique constraint \"users_email_key\"" {
-			c.JSON(http.StatusConflict, gin.H{
-				"error": "An account with this email already exists",
-			})
+			c.JSON(http.StatusConflict, gin.H{"error": "An account with this email already exists"})
 		} else {
-			log.Printf("Database error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Server error creating account",
-			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error creating account"})
 		}
 		return
 	}
 
-	// ---- STEP 5: Generate JWT tokens ----
-	// After successful registration, we log them in automatically
-	// This avoids the annoying "please login" step
-	generateAndSetTokens(c, newUserID, input.Role)
+	// ---- LOUD MOCK EMAIL DELIVERY ----
+	fmt.Println("\n=======================================================")
+	fmt.Println("🚨🚨🚨 ATTENTION: NEW REGISTRATION OTP 🚨🚨🚨")
+	fmt.Printf("EMAIL: %s\n", input.Email)
+	fmt.Printf("CODE:  %s\n", otp)
+	fmt.Println("=======================================================\n")
 
-	// ---- STEP 6: Log the event ----
-	// Always log security events for debugging and auditing
-	log.Printf("✅ New user registered: ID=%s, Email=%s, Role=%s", newUserID, input.Email, input.Role)
-
-	// ---- STEP 7: Return success response ----
-	// Notice: We don't return tokens in the response body
-	// They're in HTTP-only cookies (automatically sent by browser)
-	c.JSON(http.StatusCreated, gin.H{
-		"message": "Account created successfully",
-		"user": gin.H{
-			"id":       newUserID,
-			"fullName": input.FullName,
-			"email":    input.Email,
-			"role":     input.Role,
-		},
+	// ---- STOP! DO NOT GENERATE TOKENS ----
+	// Return 202 Accepted so React knows to go to the OTP screen
+	c.JSON(http.StatusAccepted, gin.H{
+		"message": "Please verify your account",
+		"email":   input.Email,
 	})
 }
 
@@ -581,3 +553,61 @@ func ResetPassword(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Password successfully reset. You can now log in."})
 }
 
+// Add this function anywhere in auth.go
+func VerifyAccount(c *gin.Context) {
+	var input VerifyOTPInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Valid email and 6-digit OTP are required"})
+		return
+	}
+
+	// 1. Find the user by email AND otp code, ensuring it hasn't expired
+	var user models.User
+	query := `
+		SELECT id, full_name, email, role 
+		FROM users 
+		WHERE email = $1 AND otp_code = $2 AND otp_expires_at > NOW() AND is_verified = false
+	`
+	
+	err := database.DB.QueryRow(query, input.Email, input.OTP).Scan(
+		&user.ID,
+		&user.FullName,
+		&user.Email,
+		&user.Role,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Invalid or expired verification code.",
+		})
+		return
+	}
+
+	// 2. Mark account as verified and destroy the OTP code
+	updateQuery := `
+		UPDATE users 
+		SET is_verified = true, otp_code = NULL, otp_expires_at = NULL 
+		WHERE id = $1
+	`
+	_, err = database.DB.Exec(updateQuery, user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify account"})
+		return
+	}
+
+	// 3. THE HANDSHAKE: Now that they are verified, we issue the secure cookies!
+	generateAndSetTokens(c, user.ID, string(user.Role))
+
+	log.Printf("✅ Account verified and logged in: %s", user.Email)
+
+	// 4. Return the user data so Zustand can store it
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Account verified successfully",
+		"user": gin.H{
+			"id":       user.ID,
+			"fullName": user.FullName,
+			"email":    user.Email,
+			"role":     user.Role,
+		},
+	})
+}

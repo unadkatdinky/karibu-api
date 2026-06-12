@@ -15,3 +15,4 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- Index the email column for ultra-fast login lookups
 CREATE INDEX idx_users_email ON users(email);
+

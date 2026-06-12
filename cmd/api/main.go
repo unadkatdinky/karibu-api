@@ -122,6 +122,7 @@ func main() {
 
 			authRoutes.POST("/forgot-password", handlers.ForgotPassword)
 			authRoutes.POST("/reset-password", handlers.ResetPassword)
+			authRoutes.POST("/verify", handlers.VerifyAccount)
 		}
 
 		// ---- PROTECTED ROUTES EXAMPLE ----
