@@ -58,14 +58,18 @@ func AuthRequired() gin.HandlerFunc {
 		// 1. Token signature matches our secret
 		// 2. Token hasn't been tampered with
 		// 3. Token hasn't expired
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			// Verify signing method is HMAC (what we use)
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			// Return secret key for verification
-			return []byte(os.Getenv("ACCESS_SECRET")), nil
-		})
+		// Replace the jwt.Parse keyfunc in AuthRequired() — around line 61
+token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+    if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+        return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+    }
+    // ✅ FIXED: same fallback as generateAndSetTokens
+    secret := os.Getenv("ACCESS_SECRET")
+    if secret == "" {
+        secret = "local_access_secret_123"
+    }
+    return []byte(secret), nil
+})
 
 		// Check if there was an error parsing
 		if err != nil {
@@ -230,11 +234,16 @@ func OptionalAuth() gin.HandlerFunc {
 
 		// Try to parse and verify token
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return []byte(os.Getenv("ACCESS_SECRET")), nil
-		})
+    if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+        return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+    }
+    // ✅ FIXED: same fallback as generateAndSetTokens
+    secret := os.Getenv("ACCESS_SECRET")
+    if secret == "" {
+        secret = "local_access_secret_123"
+    }
+    return []byte(secret), nil
+})
 
 		// If token is valid, extract info
 		if err == nil && token.Valid {

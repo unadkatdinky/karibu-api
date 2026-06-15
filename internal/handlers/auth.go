@@ -240,13 +240,16 @@ func RefreshToken(c *gin.Context) {
 	// ---- STEP 2: Verify refresh token ----
 	// Parse the JWT token using the refresh secret
 	token, err := jwt.Parse(refreshTokenString, func(token *jwt.Token) (interface{}, error) {
-		// Verify the signing method is what we expect
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		// Return the secret key for verification
-		return []byte(os.Getenv("REFRESH_SECRET")), nil
-	})
+    if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+        return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+    }
+    // ✅ FIXED: same fallback as generateAndSetTokens
+    secret := os.Getenv("REFRESH_SECRET")
+    if secret == "" {
+        secret = "local_refresh_secret_123"
+    }
+    return []byte(secret), nil
+})
 
 	if err != nil || !token.Valid {
 		c.JSON(http.StatusUnauthorized, gin.H{

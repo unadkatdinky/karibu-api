@@ -26,6 +26,12 @@ func main() {
 	// If .env doesn't exist, it's OK (uses OS environment variables instead)
 	godotenv.Load()
 
+	 // ✅ ADD THIS BLOCK immediately after godotenv.Load()
+    if os.Getenv("ACCESS_SECRET") == "" || os.Getenv("REFRESH_SECRET") == "" {
+        log.Fatal("❌ FATAL: ACCESS_SECRET and REFRESH_SECRET must be set. Check your .env file.")
+    }
+
+
 	// ============================================
 	// 2. CONNECT TO DATABASE
 	// ============================================
