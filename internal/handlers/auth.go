@@ -125,7 +125,7 @@ func Register(c *gin.Context) {
 	fmt.Println("🚨🚨🚨 ATTENTION: NEW REGISTRATION OTP 🚨🚨🚨")
 	fmt.Printf("EMAIL: %s\n", input.Email)
 	fmt.Printf("CODE:  %s\n", otp)
-	fmt.Println("=======================================================\n")
+	// fmt.Println("=======================================================\n")
 
 	// ---- STOP! DO NOT GENERATE TOKENS ----
 	// Return 202 Accepted so React knows to go to the OTP screen
