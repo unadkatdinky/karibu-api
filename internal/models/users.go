@@ -8,7 +8,7 @@ type Role string
 
 const (
 	RoleTraveler   Role = "Traveler"
-	RoleLocalGuide Role = "Local Guide"
+	RoleLocalGuide Role = "LocalGuide"
 	RoleAdmin      Role = "Admin"
 )
 
@@ -22,3 +22,4 @@ type User struct {
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 }
+
