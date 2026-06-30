@@ -1,13 +1,14 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"time"
-	"math/rand"
-    "encoding/hex"
 
 	"karibu-api/internal/database"
 	"karibu-api/internal/models"
@@ -90,8 +91,12 @@ func Register(c *gin.Context) {
 	}
 
 	// ---- NEW OTP LOGIC ----
-	// Generate a 6-digit random number
-	otp := fmt.Sprintf("%06d", rand.Intn(1000000))
+	// Generate a cryptographically secure 6-digit code
+	otp, err := generateOTP()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error generating verification code"})
+		return
+	}
 	expiresAt := time.Now().Add(15 * time.Minute)
 
 	var newUserID string
@@ -125,7 +130,7 @@ func Register(c *gin.Context) {
 	fmt.Println("🚨🚨🚨 ATTENTION: NEW REGISTRATION OTP 🚨🚨🚨")
 	fmt.Printf("EMAIL: %s\n", input.Email)
 	fmt.Printf("CODE:  %s\n", otp)
-	// fmt.Println("=======================================================\n")
+	fmt.Println("=======================================================\n")
 
 	// ---- STOP! DO NOT GENERATE TOKENS ----
 	// Return 202 Accepted so React knows to go to the OTP screen
@@ -478,6 +483,16 @@ func generateSecureToken() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
+// Helper to generate a cryptographically secure 6-digit OTP code
+func generateOTP() (string, error) {
+	max := big.NewInt(1000000) // 0 to 999999
+	n, err := rand.Int(rand.Reader, max)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%06d", n.Int64()), nil
+}
+
 func ForgotPassword(c *gin.Context) {
 	var input ForgotPasswordInput
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -529,24 +544,49 @@ func ResetPassword(c *gin.Context) {
 		return
 	}
 
-	// 2. Hash the new password
+	// 2. Look up the user by token first (must still be unexpired) so we can
+	// compare the new password against their CURRENT hash before doing anything else.
+	var userID, currentHash string
+	lookupQuery := `
+		SELECT id, password_hash
+		FROM users
+		WHERE reset_token = $1 AND reset_token_expires_at > NOW()
+	`
+	err := database.DB.QueryRow(lookupQuery, input.Token).Scan(&userID, &currentHash)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired reset link. Please request a new one."})
+		return
+	}
+
+	// 3. Reject if the new password is the same as the current one.
+	// bcrypt.CompareHashAndPassword returns nil (no error) when they match.
+	if currentHash != "" {
+		if err := bcrypt.CompareHashAndPassword([]byte(currentHash), []byte(input.NewPassword)); err == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "New password cannot be the same as your current password. Please choose a different one.",
+			})
+			return
+		}
+	}
+
+	// 4. Hash the new password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), 12)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process password"})
 		return
 	}
 
-	// 3. Find the user by token, check expiration, and update password
-	// We also immediately NULL the token so it can never be used again
-	query := `
+	// 5. Update the password, scoped to this user, and immediately NULL the
+	// token so it can never be used again (also re-checks expiry defensively).
+	updateQuery := `
 		UPDATE users 
 		SET password_hash = $1, reset_token = NULL, reset_token_expires_at = NULL 
-		WHERE reset_token = $2 AND reset_token_expires_at > NOW() 
+		WHERE id = $2 AND reset_token = $3 AND reset_token_expires_at > NOW() 
 		RETURNING id
 	`
-	
+
 	var id string
-	err = database.DB.QueryRow(query, string(hashedPassword), input.Token).Scan(&id)
+	err = database.DB.QueryRow(updateQuery, string(hashedPassword), userID, input.Token).Scan(&id)
 
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired reset link. Please request a new one."})
@@ -613,4 +653,58 @@ func VerifyAccount(c *gin.Context) {
 			"role":     user.Role,
 		},
 	})
+}
+
+// ============================================
+// RESEND OTP HANDLER
+// ============================================
+// Generates a new OTP code for an unverified account and replaces the old one.
+// Called when the user taps "Resend code" on the verification screen.
+
+type ResendOTPInput struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+func ResendOTP(c *gin.Context) {
+	var input ResendOTPInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Valid email is required"})
+		return
+	}
+
+	otp, err := generateOTP()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error generating verification code"})
+		return
+	}
+	expiresAt := time.Now().Add(15 * time.Minute)
+
+	// Only issue a new OTP if the account exists AND is not yet verified.
+	// We don't reveal whether the email exists, mirroring ForgotPassword's behavior.
+	query := `
+		UPDATE users
+		SET otp_code = $1, otp_expires_at = $2
+		WHERE email = $3 AND is_verified = false
+		RETURNING id
+	`
+	var id string
+	err = database.DB.QueryRow(query, otp, expiresAt, input.Email).Scan(&id)
+
+	if err != nil {
+		// Either the account doesn't exist or is already verified.
+		// Return a generic success-shaped message either way to avoid leaking account state.
+		c.JSON(http.StatusOK, gin.H{"message": "If an unverified account exists for this email, a new code has been sent."})
+		return
+	}
+
+	// ---- LOUD MOCK EMAIL DELIVERY ----
+	fmt.Println("\n=======================================================")
+	fmt.Println("🚨🚨🚨 ATTENTION: RESENT REGISTRATION OTP 🚨🚨🚨")
+	fmt.Printf("EMAIL: %s\n", input.Email)
+	fmt.Printf("CODE:  %s\n", otp)
+	fmt.Println("=======================================================\n")
+
+	log.Printf("✅ OTP resent for: %s", input.Email)
+
+	c.JSON(http.StatusOK, gin.H{"message": "If an unverified account exists for this email, a new code has been sent."})
 }

@@ -129,6 +129,10 @@ func main() {
 			authRoutes.POST("/forgot-password", handlers.ForgotPassword)
 			authRoutes.POST("/reset-password", handlers.ResetPassword)
 			authRoutes.POST("/verify", handlers.VerifyAccount)
+			authRoutes.POST("/resend-otp",
+				middleware.AuthRateLimiter(), // Rate limited like other auth-creation endpoints
+				handlers.ResendOTP,
+			)
 		}
 
 		// ---- PROTECTED ROUTES EXAMPLE ----
