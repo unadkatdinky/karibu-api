@@ -1,0 +1,17 @@
+.env
+.env.local
+.env.*.local
+
+# Go build artifacts
+/bin/
+/tmp/
+*.exe
+*.test
+*.out
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
