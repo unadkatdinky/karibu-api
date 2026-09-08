@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +19,18 @@ import (
 	"github.com/joho/godotenv"
 )
 
+func requireEnvVars(keys ...string) {
+	missing := []string{}
+	for _, key := range keys {
+		if os.Getenv(key) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		log.Fatalf("❌ FATAL: missing required env vars: %s", strings.Join(missing, ", "))
+	}
+}
+
 func main() {
 	// ============================================
 	// 1. LOAD ENVIRONMENT VARIABLES
@@ -26,14 +39,8 @@ func main() {
 	// If .env doesn't exist, it's OK (uses OS environment variables instead)
 	godotenv.Load()
 
-	 // ✅ ADD THIS BLOCK immediately after godotenv.Load()
-    if os.Getenv("ACCESS_SECRET") == "" || os.Getenv("REFRESH_SECRET") == "" {
-        log.Fatal("❌ FATAL: ACCESS_SECRET and REFRESH_SECRET must be set. Check your .env file.")
-    }
-
-
-	// ============================================
-	// 2. CONNECT TO DATABASE
+	// Require critical secrets at startup to avoid misconfigured deployments.
+	requireEnvVars("ACCESS_SECRET", "REFRESH_SECRET", "GEMINI_API_KEY")
 	// ============================================
 	// This initializes the PostgreSQL connection pool
 	// If it fails, the program exits here (log.Fatalf)
@@ -67,7 +74,7 @@ func main() {
 	// 5173 (Vite's default dev port) if the env var isn't set.
 	corsOrigin := os.Getenv("CORS_ORIGIN")
 	if corsOrigin == "" {
-		corsOrigin = "http://localhost:5173"
+		corsOrigin = "http://localhost:5174"
 	}
 	r.Use(cors.New(cors.Config{
 		AllowOrigins: []string{corsOrigin},
@@ -163,10 +170,10 @@ func main() {
 		destinationsRoutes := api.Group("/destinations")
 		destinationsRoutes.Use(middleware.AuthRequired())
 		{
-			destinationsRoutes.GET("", handlers.GetDestinations)                    // browse all
-			destinationsRoutes.GET("/:slug", handlers.GetDestinationBySlug)         // detail page
-			destinationsRoutes.POST("/:id/save", handlers.SaveDestination)          // bookmark
-			destinationsRoutes.DELETE("/:id/save", handlers.UnsaveDestination)      // un-bookmark
+			destinationsRoutes.GET("", handlers.GetDestinations)               // browse all
+			destinationsRoutes.GET("/:slug", handlers.GetDestinationBySlug)    // detail page
+			destinationsRoutes.POST("/:id/save", handlers.SaveDestination)     // bookmark
+			destinationsRoutes.DELETE("/:id/save", handlers.UnsaveDestination) // un-bookmark
 		}
 
 		// ---- SAVED PLACES ROUTES (a user's bookmarked destinations) ----
@@ -176,7 +183,6 @@ func main() {
 			placesRoutes.GET("", handlers.GetSavedPlaces)
 		}
 
-		// ---- ITINERARY ROUTES (the trail planner) ----
 		itineraryRoutes := api.Group("/itineraries")
 		itineraryRoutes.Use(middleware.AuthRequired())
 		{
@@ -184,15 +190,18 @@ func main() {
 			itineraryRoutes.POST("", handlers.CreateItinerary)
 			itineraryRoutes.GET("/:id", handlers.GetItineraryByID)
 			itineraryRoutes.POST("/:id/days", handlers.AddItineraryDay)
-			
-			// Note: The stop route goes off the specific day ID
-			itineraryRoutes.POST("/days/:dayId/stops", handlers.AddItineraryStop) 
-			itineraryRoutes.POST("/:id/suggest",
-    middleware.AuthRateLimiter(),
-    handlers.GenerateTripSuggestions,
-)
-		}
+			itineraryRoutes.PATCH("/days/:dayId", handlers.UpdateItineraryDay)
+			itineraryRoutes.DELETE("/days/:dayId", handlers.DeleteItineraryDay)
 
+			// Note: The stop route goes off the specific day ID
+			itineraryRoutes.POST("/days/:dayId/stops", handlers.AddItineraryStop)
+			itineraryRoutes.PATCH("/stops/:stopId", handlers.UpdateItineraryStop)
+			itineraryRoutes.DELETE("/stops/:stopId", handlers.DeleteItineraryStop)
+			itineraryRoutes.POST("/:id/suggest",
+				middleware.AuthRateLimiter(),
+				handlers.GenerateTripSuggestions,
+			)
+		}
 		// ---- ADMIN ROUTES EXAMPLE ----
 		// These routes require authentication AND admin role
 		adminRoutes := api.Group("/admin")

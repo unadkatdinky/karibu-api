@@ -24,3 +24,13 @@ CREATE TABLE IF NOT EXISTS saved_places (
 );
 
 CREATE INDEX idx_saved_places_user_id ON saved_places(user_id);
+
+-- ============================================
+-- ITINERARY GAP FIXES
+-- ============================================
+-- Both of these were already being sent by the frontend (PermitCard's
+-- "Concluding Date" field and the cover image URL input) but had nowhere
+-- to land — CreateItinerary's request struct silently dropped them.
+ALTER TABLE itineraries
+ADD COLUMN end_date DATE,
+ADD COLUMN cover_image_url TEXT;

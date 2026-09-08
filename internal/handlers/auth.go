@@ -360,10 +360,10 @@ func Logout(c *gin.Context) {
 // HELPER FUNCTION: Set Auth Cookie
 // ============================================
 func setAuthCookie(c *gin.Context, name string, value string, maxAge int) {
+	// Leave the domain empty for local development unless explicitly configured.
+	// Setting Domain=localhost can prevent cookies from being stored or sent when
+	// the frontend is running on another local host/port combination.
 	domain := os.Getenv("COOKIE_DOMAIN")
-	if domain == "" {
-		domain = "localhost"
-	}
 	secure := os.Getenv("COOKIE_SECURE") == "true"
 
 	c.SetSameSite(http.SameSiteLaxMode)
@@ -508,7 +508,7 @@ func ForgotPassword(c *gin.Context) {
 	}
 
 	// 3. MOCK EMAIL DELIVERY: Print the link to your Go terminal!
-	resetLink := fmt.Sprintf("http://localhost:5173/reset-password?token=%s", token)
+	resetLink := fmt.Sprintf("http://localhost:5174/reset-password?token=%s", token)
 	log.Println("=====================================================")
 	log.Printf("📧 EMAIL SENT TO: %s\n", input.Email)
 	log.Printf("🔗 CLICK TO RESET: %s\n", resetLink)
