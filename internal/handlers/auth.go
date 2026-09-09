@@ -360,13 +360,16 @@ func Logout(c *gin.Context) {
 // HELPER FUNCTION: Set Auth Cookie
 // ============================================
 func setAuthCookie(c *gin.Context, name string, value string, maxAge int) {
-	// Leave the domain empty for local development unless explicitly configured.
-	// Setting Domain=localhost can prevent cookies from being stored or sent when
-	// the frontend is running on another local host/port combination.
 	domain := os.Getenv("COOKIE_DOMAIN")
 	secure := os.Getenv("COOKIE_SECURE") == "true"
 
-	c.SetSameSite(http.SameSiteLaxMode)
+	if secure {
+		// Cross-site cookies (frontend/backend on different domains)
+		// require SameSite=None, and browsers only honor None when Secure=true.
+		c.SetSameSite(http.SameSiteNoneMode)
+	} else {
+		c.SetSameSite(http.SameSiteLaxMode) // fine for local dev, same-site
+	}
 	c.SetCookie(name, value, maxAge, "/", domain, secure, true)
 }
 
