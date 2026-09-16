@@ -128,12 +128,12 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	// ---- LOUD MOCK EMAIL DELIVERY ----
-	fmt.Println("\n=======================================================")
-	fmt.Println("🚨🚨🚨 ATTENTION: NEW REGISTRATION OTP 🚨🚨🚨")
-	fmt.Printf("EMAIL: %s\n", input.Email)
-	fmt.Printf("CODE:  %s\n", otp)
-	fmt.Println("=======================================================\n")
+	// ---- SEND VERIFICATION EMAIL ----
+	// The account row already exists at this point, so a delivery failure
+	// must not fail the request — the user can hit "resend code" instead.
+	if err := utils.SendEmail(input.Email, input.FullName, "Verify your Karibu account", utils.OTPEmailBody(otp)); err != nil {
+		log.Printf("⚠️ Could not send OTP email to %s: %v", input.Email, err)
+	}
 
 	// ---- STOP! DO NOT GENERATE TOKENS ----
 	// Return 202 Accepted so React knows to go to the OTP screen
@@ -360,16 +360,13 @@ func Logout(c *gin.Context) {
 // HELPER FUNCTION: Set Auth Cookie
 // ============================================
 func setAuthCookie(c *gin.Context, name string, value string, maxAge int) {
+	// Leave the domain empty for local development unless explicitly configured.
+	// Setting Domain=localhost can prevent cookies from being stored or sent when
+	// the frontend is running on another local host/port combination.
 	domain := os.Getenv("COOKIE_DOMAIN")
 	secure := os.Getenv("COOKIE_SECURE") == "true"
 
-	if secure {
-		// Cross-site cookies (frontend/backend on different domains)
-		// require SameSite=None, and browsers only honor None when Secure=true.
-		c.SetSameSite(http.SameSiteNoneMode)
-	} else {
-		c.SetSameSite(http.SameSiteLaxMode) // fine for local dev, same-site
-	}
+	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(name, value, maxAge, "/", domain, secure, true)
 }
 
@@ -510,12 +507,18 @@ func ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	// 3. MOCK EMAIL DELIVERY: Print the link to your Go terminal!
-	resetLink := fmt.Sprintf("http://localhost:5174/reset-password?token=%s", token)
-	log.Println("=====================================================")
-	log.Printf("📧 EMAIL SENT TO: %s\n", input.Email)
-	log.Printf("🔗 CLICK TO RESET: %s\n", resetLink)
-	log.Println("=====================================================")
+	// 3. Send the reset link by email.
+	// FRONTEND_URL keeps this working across local dev and production
+	// instead of pointing every deployed user at localhost.
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "http://localhost:5173"
+	}
+	resetLink := fmt.Sprintf("%s/reset-password?token=%s", frontendURL, token)
+
+	if err := utils.SendEmail(input.Email, "", "Reset your Karibu password", utils.ResetEmailBody(resetLink)); err != nil {
+		log.Printf("⚠️ Could not send reset email to %s: %v", input.Email, err)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "If an account exists, a reset link has been sent."})
 }
@@ -687,12 +690,10 @@ func ResendOTP(c *gin.Context) {
 		return
 	}
 
-	// ---- LOUD MOCK EMAIL DELIVERY ----
-	fmt.Println("\n=======================================================")
-	fmt.Println("🚨🚨🚨 ATTENTION: RESENT REGISTRATION OTP 🚨🚨🚨")
-	fmt.Printf("EMAIL: %s\n", input.Email)
-	fmt.Printf("CODE:  %s\n", otp)
-	fmt.Println("=======================================================\n")
+	// ---- SEND VERIFICATION EMAIL ----
+	if err := utils.SendEmail(input.Email, "", "Your new Karibu verification code", utils.OTPEmailBody(otp)); err != nil {
+		log.Printf("⚠️ Could not resend OTP email to %s: %v", input.Email, err)
+	}
 
 	log.Printf("✅ OTP resent for: %s", input.Email)
 
